@@ -19,6 +19,8 @@ internal class Program
 
         Console.WriteLine($"\n🔥 faasdot v{versionString} - The Ultimate Serverless CLI Tool 🔥");
         Console.WriteLine("-------------------------------------------------------\n");
+        Console.WriteLine("FaasDot is a Function as a Service (FaaS) system for .NET 9 with many built-in services.");
+        Console.WriteLine("You can deploy solutions quickly—simplicity is our slogan.");
         Console.ResetColor();
 
         if (args.Length == 0)
@@ -187,7 +189,7 @@ internal class Program
         Console.WriteLine("Commands:");
         Console.ResetColor();
 
-        Console.WriteLine("  🔑 login          Authenticate with the system.");
+        Console.WriteLine("  🔑 login          Authenticate with FaaSDot.NET.");
         Console.WriteLine("  🚪 logout         Log out of the current session.");
         Console.WriteLine("  🎯 set-current    Set the current project by ID.");
         Console.WriteLine("  📜 list           Show deployed projects with their IDs.");
