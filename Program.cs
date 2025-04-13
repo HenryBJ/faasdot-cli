@@ -1,6 +1,8 @@
 ﻿using Serverless.CLI.Responses;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 
@@ -13,11 +15,12 @@ internal class Program
     {
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        var versionString = Assembly.GetEntryAssembly()?
+        var versionString = (Assembly.GetEntryAssembly()?
                             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-                            .InformationalVersion ?? "1.0.0";
+                            .InformationalVersion ?? "1.0.0").Split("+");
 
-        Console.WriteLine($"\n🔥 faasdot v{versionString} - The Ultimate Serverless CLI Tool 🔥");
+        Console.WriteLine($"\n🔥 faasdot v{versionString[0]} - The Ultimate Serverless CLI Tool 🔥");
+        Console.WriteLine($"\n build:{versionString[1]}");
         Console.WriteLine("-------------------------------------------------------\n");
         Console.WriteLine("FaasDot is a Function as a Service (FaaS) system for .NET 9 with many built-in services.");
         Console.WriteLine("You can deploy solutions quickly—simplicity is our slogan.");
@@ -31,7 +34,7 @@ internal class Program
 
         var command = args[0].ToLower();
 
-        bool isDevMode = args.Contains("--dev"); // Leer si el usuario pasó el flag "--dev"
+        bool isDevMode = true;//args.Contains("--dev"); // Leer si el usuario pasó el flag "--dev"
         ConfigManager configManager = new ConfigManager(isDevMode);
         
         string configPath = ConfigManager .GetConfigPath(isDevMode);
@@ -55,7 +58,7 @@ internal class Program
                 await PublishProject(args, configManager);
                 break;
             case "update":
-                await UpdateProject(args, configManager);
+                await PublishProject(args, configManager, true);
                 break;
             case "functions":
                 await ListFunctions(args, configManager);
@@ -189,29 +192,15 @@ internal class Program
         Console.WriteLine("Commands:");
         Console.ResetColor();
 
-        Console.WriteLine("  🔑 login          Authenticate with FaaSDot.NET.");
-        Console.WriteLine("  🚪 logout         Log out of the current session.");
-        Console.WriteLine("  🎯 set-current    Set the current project by ID.");
+        Console.WriteLine("  🔑 login          Authenticate with FaaSDot.NET. (not implemented)");
+        Console.WriteLine("  🚪 logout         Log out of the current session. (not implemented)");
         Console.WriteLine("  📜 list           Show deployed projects with their IDs.");
-        Console.WriteLine("  🚀 publish        Deploy a new project. Requires the .csproj path.");
-        Console.WriteLine("  🔄 update         Update an existing project. Requires the .csproj path.");
+        Console.WriteLine("  🚀 publish        Deploy project.");
+        Console.WriteLine("  🔄 update         Update an existing project.");
         Console.WriteLine("  ⚙️ functions      Show available functions.");
+        Console.WriteLine("  🎯 set-current    Set current project (arg: projectId:GUID)");
         Console.WriteLine("  📜 executions     Show execution logs.");
-        Console.WriteLine("  🗑️ delete         Delete a project from the server (removes all functions).");
-
-        Console.WriteLine("\nExample:");
-        Console.ForegroundColor = ConsoleColor.Blue;
-        Console.WriteLine("  faasdot publish C:\\Projects\\MyServerlessApp.csproj");
-        Console.WriteLine("  faasdot publish .");
-        Console.WriteLine("  faasdot list");
-        Console.WriteLine("  faasdot update C:\\Projects\\MyServerlessApp.csproj");
-        Console.WriteLine("  faasdot functions");
-        Console.WriteLine("  faasdot executions");
-        Console.WriteLine("  faasdot delete <projectId>");
-        Console.WriteLine("  faasdot set-current <projectId>");
-        Console.WriteLine("  faasdot login");
-        Console.WriteLine("  faasdot logout");
-        Console.ResetColor();
+        Console.WriteLine("  🗑️ delete         Delete the project (removes all functions).");
     }
 
     private static async Task ListFunctions(string[] args, ConfigManager _config)
@@ -252,49 +241,38 @@ internal class Program
             string route = (func.Route ?? "N/A").PadRight(columnWidths[2]);
             string method = (func.Method == 0 ? "GET" : "POST").PadRight(columnWidths[3]);
             string cron = (func.CronExpression ?? "N/A").PadRight(columnWidths[4]);
-            string lastExec = (func.LastExecution.ToString() ?? "N/A").PadRight(columnWidths[5]);
-            string nextExec = (func.NextExecution.ToString() ?? "N/A").PadRight(columnWidths[6]);
+            string lastExec = (func.LastExecution?.ToLocalTime().ToString() ?? "N/A").PadRight(columnWidths[5]);
+            string nextExec = (func.NextExecution?.ToLocalTime().ToString() ?? "N/A").PadRight(columnWidths[6]);
 
             Console.WriteLine($"{id}{name}{route}{method}{cron}{lastExec}{nextExec}");
         }
     }
 
-    private static async Task PublishProject(string[] args, ConfigManager _config)
+    private static async Task PublishProject(string[] args, ConfigManager _config, bool isUpdating = false)
     {
-        if (args.Length < 2)
+        var csprojFiles = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj", SearchOption.TopDirectoryOnly);
+        if (csprojFiles.Length == 0)
         {
-            Console.WriteLine("❌ Please provide the project path.");
+            Console.WriteLine("❌ No .csproj file found in the current directory.");
             return;
         }
-
-        string projectPath = args[1];
-
-        if (projectPath == ".")
+        if (csprojFiles.Length > 1)
         {
-            var csprojFiles = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj", SearchOption.TopDirectoryOnly);
-            if (csprojFiles.Length == 0)
-            {
-                Console.WriteLine("❌ No .csproj file found in the current directory.");
-                return;
-            }
-            if (csprojFiles.Length > 1)
-            {
-                Console.WriteLine("❌ Multiple .csproj files found in the current directory. Please specify one.");
-                return;
-            }
-            projectPath = csprojFiles[0];
+            Console.WriteLine("❌ Multiple .csproj files found in the current directory. Please specify one.");
+            return;
         }
+        var projectPath = csprojFiles[0];
 
         string publishPath = Path.Combine(Path.GetDirectoryName(projectPath)!, "publish");
-        string mergedDllPath = Path.Combine(publishPath, "MergedProject.dll");
 
-        Console.WriteLine("🚀 Publishing project...");
+        
+        Console.WriteLine("🚀 Building project...");
         var publishProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"publish \"{projectPath}\" -c Release -o \"{publishPath}\" --self-contained false",
+                Arguments = $"publish \"{projectPath}\" -c Release -o \"{publishPath}\" --self-contained false -r linux-x64 -p:DebugType=none ",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -309,210 +287,88 @@ internal class Program
         if (publishProcess.ExitCode != 0)
         {
             Console.WriteLine($"❌ Compilation failed: {errorOutput}");
+            Cleanups(publishPath, string.Empty);
             return;
         }
+        // ---------------- ZIPPING ----------------------
+        Console.WriteLine("📦 Zipping publish output...");
+        string zipPath = Path.Combine(Path.GetTempPath(), $"{Path.GetFileNameWithoutExtension(projectPath)}.zip");
 
-        string[] dllFiles = Directory.GetFiles(publishPath, "*.dll", SearchOption.AllDirectories);
-        if (dllFiles.Length == 0)
-        {
-            Console.WriteLine("❌ No DLLs found in publish directory.");
-            return;
-        }
+        if (File.Exists(zipPath))
+            File.Delete(zipPath);
 
-        string dllsToMerge = string.Join(" ", dllFiles
-            .Where(f => !f.EndsWith("Serverless.Lib.dll"))
-            .Select(f => $"\"{f}\""));
-        Console.WriteLine("🔗 Merging assemblies...");
-
-        var ilRepackProcess = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "ilrepack",
-                Arguments = $"/out:\"{mergedDllPath}\" /lib:\"{publishPath}\" {dllsToMerge}",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
-
-        ilRepackProcess.Start();
-        await ilRepackProcess.WaitForExitAsync();
-
-        string ilRepackError = await ilRepackProcess.StandardError.ReadToEndAsync();
-        if (ilRepackProcess.ExitCode != 0)
-        {
-            Console.WriteLine($"❌ ILRepack failed: {ilRepackError}");
-            return;
-        }
-
-        if (!File.Exists(mergedDllPath))
-        {
-            Console.WriteLine("❌ Merged assembly not found.");
-            return;
-        }
-
-        Console.WriteLine("📤 Uploading merged DLL...");
-        using var httpClient = new HttpClient();
-        using var dllContent = new ByteArrayContent(await File.ReadAllBytesAsync(mergedDllPath));
-        var response = await httpClient.PostAsync($"{_config.ConfigData.BaseUrl}/api/upload", dllContent);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"❌ Upload failed. Status: {response.StatusCode}");
-            return;
-        }
-
-        IdResponse? resp = null;
         try
         {
-            resp = await response.Content.ReadFromJsonAsync<IdResponse>();
+            ZipFile.CreateFromDirectory(publishPath, zipPath);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            Console.WriteLine("❌ Error: Invalid response from server.");
+            Console.WriteLine($"❌ Error zipping: {ex.Message}");
+            Cleanups(publishPath, null);
             return;
         }
         
 
-        Console.WriteLine($"✅ Upload successful, project id: {resp?.Id}");
-        Directory.Delete(publishPath, true);
+        // ---------------- END ZIPPING -------------------
 
-        // Add project record to ConfigManager
-        _config.AddProject(resp!.Id, projectPath);
-        _config.SetCurrent(resp!.Id);
-        Console.WriteLine("🧹 Cleanup completed.");
+        Console.WriteLine("📤 Uploading ZIP package...");
+
+        using var httpClient = new HttpClient();
+        using var zipContent = new ByteArrayContent(await File.ReadAllBytesAsync(zipPath));
+        zipContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+
+        string endpoint = isUpdating ? 
+            $"{_config.ConfigData.BaseUrl}/api/update/{_config.ConfigData.CurrentProyectId}?name={Path.GetFileNameWithoutExtension(projectPath)}.dll" 
+            : $"{_config.ConfigData.BaseUrl}/api/upload?name={Path.GetFileNameWithoutExtension(projectPath)}.dll";
+
+
+        HttpResponseMessage? response = null;
+        if (isUpdating)
+        {
+            response = await httpClient.PutAsync(endpoint, zipContent);
+        }
+        else
+        {
+            response = await httpClient.PostAsync(endpoint, zipContent);
+        }
+        
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"❌ Upload failed. Status: {response.StatusCode}");
+            Cleanups(publishPath, zipPath);
+            return;
+        }
+
+        if (isUpdating)
+        {
+            Console.WriteLine("✅ Update successful");
+        }
+        else
+        {
+            IdResponse? resp = null;
+            try
+            {
+                resp = await response.Content.ReadFromJsonAsync<IdResponse>();
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("❌ Error: Invalid response from server.");
+                Cleanups(publishPath, zipPath);
+                return;
+            }
+            // Add project record to ConfigManager
+            _config.AddProject(resp!.Id, projectPath);
+            _config.SetCurrent(resp!.Id);
+            Console.WriteLine($"✅ Upload successful, project id: {resp?.Id}");
+        }
+        Cleanups(publishPath, zipPath);
     }
 
-    private static async Task UpdateProject(string[] args, ConfigManager _config)
+    private static void Cleanups(string publishPath, string zipPath)
     {
-        if (args.Length < 2)
-        {
-            Console.WriteLine("❌ Please provide the project path.");
-            return;
-        }
-
-        string projectPath = args[1];
-
-        if (projectPath == ".")
-        {
-            var csprojFiles = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj", SearchOption.TopDirectoryOnly);
-            if (csprojFiles.Length == 0)
-            {
-                Console.WriteLine("❌ No .csproj file found in the current directory.");
-                return;
-            }
-            if (csprojFiles.Length > 1)
-            {
-                Console.WriteLine("❌ Multiple .csproj files found in the current directory. Please specify one.");
-                return;
-            }
-            projectPath = csprojFiles[0];
-        }
-
-        Guid? projectId = _config.GetProjectIdByPath(projectPath);
-
-        if (projectId == null)
-        {
-            Console.WriteLine("❌ No project file found in config with this path.");
-            return;
-        }
-
-        string publishPath = Path.Combine(Path.GetDirectoryName(projectPath)!, "publish");
-        string mergedDllPath = Path.Combine(publishPath, "MergedProject.dll");
-
-        Console.WriteLine("🚀 Updating project...");
-        var publishProcess = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"publish \"{projectPath}\" -c Release -o \"{publishPath}\" --self-contained false",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
-
-        publishProcess.Start();
-        await publishProcess.WaitForExitAsync();
-
-        string errorOutput = await publishProcess.StandardError.ReadToEndAsync();
-        if (publishProcess.ExitCode != 0)
-        {
-            Console.WriteLine($"❌ Compilation failed: {errorOutput}");
-            return;
-        }
-
-        string[] dllFiles = Directory.GetFiles(publishPath, "*.dll", SearchOption.AllDirectories);
-        if (dllFiles.Length == 0)
-        {
-            Console.WriteLine("❌ No DLLs found in publish directory.");
-            return;
-        }
-
-        string dllsToMerge = string.Join(" ", dllFiles
-            .Where(f => !f.EndsWith("Serverless.Lib.dll"))
-            .Select(f => $"\"{f}\""));
-        Console.WriteLine("🔗 Merging assemblies...");
-
-        var ilRepackProcess = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "ilrepack",
-                Arguments = $"/out:\"{mergedDllPath}\" /lib:\"{publishPath}\" {dllsToMerge}",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
-
-        ilRepackProcess.Start();
-        await ilRepackProcess.WaitForExitAsync();
-
-        string ilRepackError = await ilRepackProcess.StandardError.ReadToEndAsync();
-        if (ilRepackProcess.ExitCode != 0)
-        {
-            Console.WriteLine($"❌ ILRepack failed: {ilRepackError}");
-            return;
-        }
-
-        if (!File.Exists(mergedDllPath))
-        {
-            Console.WriteLine("❌ Merged assembly not found.");
-            return;
-        }
-
-        Console.WriteLine("📤 Uploading merged DLL...");
-        using var httpClient = new HttpClient();
-        using var dllContent = new ByteArrayContent(await File.ReadAllBytesAsync(mergedDllPath));
-        var response = await httpClient.PostAsync($"{_config.ConfigData.BaseUrl}/api/update/{projectId}", dllContent);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"❌ Upload failed. Status: {response.StatusCode}");
-            return;
-        }
-
-        IdResponse? resp = null;
-        try
-        {
-            resp = await response.Content.ReadFromJsonAsync<IdResponse>();
-        }
-        catch (Exception)
-        {
-            Console.WriteLine("❌ Error: Invalid response from server.");
-            return;
-        }
-
-
-        Console.WriteLine($"✅ Upload successful, project id: {resp?.Id}");
+        if(!string.IsNullOrEmpty(zipPath))File.Delete(zipPath);
         Directory.Delete(publishPath, true);
-        
         Console.WriteLine("🧹 Cleanup completed.");
     }
 
@@ -552,7 +408,7 @@ internal class Program
         {
             string name = exec.FunctionName.PadRight(columnWidths[0]);
             string date = exec.Date.ToString().PadRight(columnWidths[1]);
-            string nextExec = exec.NextExecutionDate.ToString().PadRight(columnWidths[2]);
+            string nextExec = exec.NextExecutionDate.ToLocalTime().ToString().PadRight(columnWidths[2]);
             string execTime = (exec.ExecutionTime?.ToString() ?? "N/A").PadRight(columnWidths[3]);
             string loadTime = (exec.LoadingTime?.ToString() ?? "N/A").PadRight(columnWidths[4]);
             string status = exec.Status.PadRight(columnWidths[5]);
@@ -586,7 +442,8 @@ internal class Program
             Console.WriteLine($"❌ Error: Unable to delete execution. Status: {response.StatusCode}");
             return;
         }
-
+        _config.RemoveProjectByAssemblyId(project.Id);
+        Console.WriteLine($"✅ Project with ID {project.Id} remove from config successfully.");
         Console.WriteLine("✅ Project deleted successfully.");
     }
 }

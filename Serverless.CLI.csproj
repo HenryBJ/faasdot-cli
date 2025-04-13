@@ -18,11 +18,4 @@
 	  
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="ilrepack" Version="2.0.41">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
-  </ItemGroup>
-
 </Project>

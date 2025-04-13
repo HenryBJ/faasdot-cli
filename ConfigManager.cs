@@ -89,7 +89,7 @@ public class ConfigManager
 
     public void SetCurrent(Guid assemblyId)
     {
-        if (ConfigData.Projects.Any(p => p.Id == assemblyId))
+        if (ConfigData.Projects.Any(p => p.Id == assemblyId) || assemblyId == Guid.Empty)
         {
             ConfigData.CurrentProyectId = assemblyId;
             SaveConfig();
@@ -112,9 +112,9 @@ public class ConfigManager
     }
 
 
-    public void RemoveProjectByAssemblyId(Guid assemblyId, bool isDevMode = false)
+    public void RemoveProjectByAssemblyId(Guid assemblyId)
     {
-
+        SetCurrent(Guid.Empty);
         ConfigData.Projects.RemoveAll(p => p.Id == assemblyId);
         SaveConfig();
     }
@@ -123,10 +123,11 @@ public class ConfigManager
 public class Config
 {
     public string AuthUrl { get; set; } = "https://auth.joseenrique.dev";
-    public string BaseUrl { get; set; } = "http://localhost:5051";
+    public string BaseUrl { get; set; } = "https://faas.joseenrique.dev";
     public Guid CurrentProyectId { get; set; }
     public string Token { get; set; } = "";
     public List<Project> Projects { get; set; } = new();
+    
 }
 
 public class Project
